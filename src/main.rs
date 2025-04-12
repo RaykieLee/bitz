@@ -3,12 +3,7 @@ mod command;
 mod error;
 mod send;
 mod utils;
-
-use futures::StreamExt;
 use std::{sync::Arc, sync::RwLock};
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::protocol::Message;
-
 use args::*;
 use clap::{command, Parser, Subcommand};
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -16,7 +11,7 @@ use solana_sdk::{
     commitment_config::CommitmentConfig,
     signature::{read_keypair_file, Keypair},
 };
-use utils::{PoolCollectingData, SoloCollectingData, Tip};
+use utils::{PoolCollectingData, SoloCollectingData};
 
 // TODO: Unify balance and proof into "account"
 // TODO: Move balance subcommands to "pool"

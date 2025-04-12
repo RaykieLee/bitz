@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use colored::*;
 use eore_api::consts::MINT_ADDRESS;
-use eore_api::consts;
 use solana_program::pubkey::Pubkey;
 use solana_sdk::signature::Signer;
 use spl_token::amount_to_ui_amount;

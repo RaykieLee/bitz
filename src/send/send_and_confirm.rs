@@ -1,5 +1,4 @@
-use std::{str::FromStr, time::Duration};
-
+use std::{time::Duration};
 use colored::*;
 use eore_api::error::OreError;
 use indicatif::ProgressBar;
@@ -11,7 +10,6 @@ use solana_client::{
 use solana_program::{
     instruction::Instruction,
     native_token::{lamports_to_sol, sol_to_lamports},
-    pubkey::Pubkey,
 };
 use solana_rpc_client::spinner;
 use solana_sdk::{
@@ -29,11 +27,9 @@ const MIN_ETH_BALANCE: f64 = 0.0005;
 
 const RPC_RETRIES: usize = 0;
 const _SIMULATION_RETRIES: usize = 4;
-const GATEWAY_RETRIES: usize = 150;
-const CONFIRM_RETRIES: usize = 8;
+const CONFIRM_RETRIES: usize = 3;
 
 const CONFIRM_DELAY: u64 = 500;
-const GATEWAY_DELAY: u64 = 0;
 
 impl Miner {
     pub async fn send_and_confirm(
@@ -110,7 +106,7 @@ impl Miner {
 
         // Build tx
         debug!("Building transaction with config: skip_preflight=true, commitment=Confirmed");
-        let send_cfg = RpcSendTransactionConfig {
+        let _send_cfg = RpcSendTransactionConfig {
             skip_preflight: true,
             preflight_commitment: Some(CommitmentLevel::Confirmed),
             encoding: Some(UiTransactionEncoding::Base64),
