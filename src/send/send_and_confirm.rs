@@ -27,7 +27,7 @@ const MIN_ETH_BALANCE: f64 = 0.0005;
 
 const RPC_RETRIES: usize = 0;
 const _SIMULATION_RETRIES: usize = 4;
-const CONFIRM_RETRIES: usize = 3;
+const CONFIRM_RETRIES: usize = 8;
 
 const CONFIRM_DELAY: u64 = 500;
 
