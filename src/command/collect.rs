@@ -1,6 +1,7 @@
 use std::{
     io::stdout,
-    sync::{Arc, RwLock},
+    sync::{Arc},
+    sync::atomic::{AtomicU32, Ordering},
     thread::sleep,
     time::{Duration, Instant},
     usize,
@@ -91,6 +92,9 @@ impl Miner {
         let mut last_hash_at = 0;
         loop {
             // Fetch accounts
+            let clock = get_clock(&self.rpc_client)
+                .await
+                .expect("Failed to fetch clock account");
             let config = get_config(&self.rpc_client).await;
             let proof =
                 get_updated_proof_with_authority(&self.rpc_client, signer.pubkey(), last_hash_at)
@@ -104,14 +108,7 @@ impl Miner {
             last_hash_at = proof.last_hash_at;
 
             // Calculate cutoff time
-            let cutoff_time = self.get_cutoff(proof.last_hash_at, args.buffer_time).await;
-
-            // Build nonce indices
-            let mut nonce_indices = Vec::with_capacity(cores as usize);
-            for n in 0..(cores) {
-                let nonce = u64::MAX.saturating_div(cores).saturating_mul(n);
-                nonce_indices.push(nonce);
-            }
+            let cutoff_time = self.get_cutoff(&clock, proof.last_hash_at, args.buffer_time);
 
             // Run drillx
             let solution = Self::find_hash_par(
@@ -119,7 +116,6 @@ impl Miner {
                 cutoff_time,
                 cores,
                 config.min_difficulty as u32,
-                nonce_indices.as_slice(),
                 None,
             )
             .await;
@@ -129,7 +125,7 @@ impl Miner {
             let mut compute_budget = 750_000;
 
             // Check for reset
-            if self.should_reset(config).await
+            if self.should_reset(&clock, config).await
             // && rand::thread_rng().gen_range(0..100).eq(&0)
             {
                 compute_budget += 100_000;
@@ -218,8 +214,13 @@ impl Miner {
             // Increment last balance and hash
             last_hash_at = member_challenge.challenge.lash_hash_at;
 
+            // Fetch clock once per loop iteration
+            let clock = get_clock(&self.rpc_client)
+                .await
+                .expect("Failed to fetch clock account");
+
             // Compute cutoff time
-            let cutoff_time = self.get_cutoff(last_hash_at, args.buffer_time).await;
+            let cutoff_time = self.get_cutoff(&clock, last_hash_at, args.buffer_time);
 
             // Build nonce indices
             let num_total_members = member_challenge.num_total_members.max(1);
@@ -233,16 +234,8 @@ impl Miner {
             }
 
             // Calculate bounds on nonce space
-            let left_bound = member_search_space_size.saturating_mul(nonce_index)
+            let _left_bound = member_search_space_size.saturating_mul(nonce_index)
                 + device_id.saturating_mul(device_search_space_size);
-
-            // Split nonce-device space for muliple cores
-            let range_per_core = device_search_space_size.saturating_div(cores);
-            let mut nonce_indices = Vec::with_capacity(cores as usize);
-            for n in 0..(cores) {
-                let index = left_bound + n * range_per_core;
-                nonce_indices.push(index);
-            }
 
             // Run drillx
             let solution = Self::find_hash_par(
@@ -250,7 +243,6 @@ impl Miner {
                 cutoff_time,
                 cores,
                 member_challenge.challenge.min_difficulty as u32,
-                nonce_indices.as_slice(),
                 Some(tx.clone()),
             )
             .await;
@@ -274,12 +266,11 @@ impl Miner {
         cutoff_time: u64,
         cores: u64,
         min_difficulty: u32,
-        nonce_indices: &[u64],
         pool_channel: Option<tokio::sync::mpsc::UnboundedSender<Solution>>,
     ) -> Solution {
         // Dispatch job to each thread
         let progress_bar = Arc::new(spinner::new_progress_bar());
-        let global_best_difficulty = Arc::new(RwLock::new(0u32));
+        let global_best_difficulty = Arc::new(AtomicU32::new(0u32));
 
         progress_bar.set_message("Collecting...");
         let core_ids = core_affinity::get_core_ids().expect("Failed to fetch core count");
@@ -289,7 +280,6 @@ impl Miner {
                 let global_best_difficulty = Arc::clone(&global_best_difficulty);
                 std::thread::spawn({
                     let progress_bar = progress_bar.clone();
-                    let nonce = nonce_indices[i.id];
                     let mut memory = equix::SolverMemory::new();
                     let pool_channel = pool_channel.clone();
                     move || {
@@ -298,7 +288,7 @@ impl Miner {
 
                         // Start hashing
                         let timer = Instant::now();
-                        let mut nonce = nonce;
+                        let mut nonce = rand::thread_rng().gen::<u64>();
                         let mut best_nonce = nonce;
                         let mut best_difficulty = 0;
                         let mut best_hash = Hash::default();
@@ -317,10 +307,10 @@ impl Miner {
                                     best_nonce = nonce;
                                     best_difficulty = difficulty;
                                     best_hash = hx;
-                                    if best_difficulty.gt(&*global_best_difficulty.read().unwrap())
+                                    let current_global_best = global_best_difficulty.load(Ordering::Relaxed);
+                                    if best_difficulty.gt(&current_global_best)
                                     {
-                                        // Update best global difficulty
-                                        *global_best_difficulty.write().unwrap() = best_difficulty;
+                                        global_best_difficulty.fetch_max(best_difficulty, Ordering::Relaxed);
 
                                         // Continuously upload best solution to pool
                                         if difficulty.ge(&min_difficulty) {
@@ -342,23 +332,22 @@ impl Miner {
 
                             // Exit if time has elapsed
                             if nonce % 100 == 0 {
-                                let global_best_difficulty =
-                                    *global_best_difficulty.read().unwrap();
+                                let current_global_best = global_best_difficulty.load(Ordering::Relaxed);
                                 if timer.elapsed().as_secs().ge(&cutoff_time) {
                                     if i.id == 0 {
                                         progress_bar.set_message(format!(
                                             "Collecting...\n  Best score: {}",
-                                            global_best_difficulty,
+                                            current_global_best,
                                         ));
                                     }
-                                    if global_best_difficulty.ge(&min_difficulty) {
+                                    if current_global_best.ge(&min_difficulty) {
                                         // Collect until min difficulty has been met
                                         break;
                                     }
                                 } else if i.id == 0 {
                                     progress_bar.set_message(format!(
                                         "Collecting...\n  Best score: {}\n  Time remaining: {}",
-                                        global_best_difficulty,
+                                        current_global_best,
                                         format_duration(
                                             cutoff_time.saturating_sub(timer.elapsed().as_secs())
                                                 as u32
@@ -414,10 +403,7 @@ impl Miner {
         }
     }
 
-    async fn should_reset(&self, config: Config) -> bool {
-        let clock = get_clock(&self.rpc_client)
-            .await
-            .expect("Failed to fetch clock account");
+    async fn should_reset(&self, clock: &solana_program::clock::Clock, config: Config) -> bool {
         config
             .last_reset_at
             .saturating_add(EPOCH_DURATION)
@@ -425,10 +411,7 @@ impl Miner {
             .le(&clock.unix_timestamp)
     }
 
-    async fn get_cutoff(&self, last_hash_at: i64, buffer_time: u64) -> u64 {
-        let clock = get_clock(&self.rpc_client)
-            .await
-            .expect("Failed to fetch clock account");
+    fn get_cutoff(&self, clock: &solana_program::clock::Clock, last_hash_at: i64, buffer_time: u64) -> u64 {
         last_hash_at
             .saturating_add(60)
             .saturating_sub(buffer_time as i64)
