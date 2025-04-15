@@ -179,6 +179,30 @@ pub struct CollectArgs {
         default_value = "0"
     )]
     pub gpu_device: u32,
+
+    #[arg(
+        long,
+        value_name = "BATCH_SIZE",
+        help = "GPU batch size (512, 768, 1024, etc)",
+        default_value = "1024"
+    )]
+    pub batch_size: u32,
+
+    #[arg(
+        long,
+        value_name = "HASH_THREADS",
+        help = "GPU threads per block for hash stage (256, 320, 384)",
+        default_value = "384"
+    )]
+    pub hash_threads: u32,
+
+    #[arg(
+        long,
+        value_name = "SOLVE_THREADS",
+        help = "GPU threads per block for solve stage (128, 160, 192)",
+        default_value = "192"
+    )]
+    pub solve_threads: u32,
 }
 
 #[derive(Parser, Debug)]

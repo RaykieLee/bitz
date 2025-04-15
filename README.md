@@ -54,6 +54,93 @@ You can also specify the GPU device to use if you have multiple GPUs:
 bitz collect --gpu --gpu-device 0
 ```
 
+## 🔧 Optimize Mining
+
+### Set Minimum Difficulty
+
+You can set a custom minimum difficulty to focus on higher-value solutions:
+
+```sh
+bitz collect -m 25
+```
+
+This will only submit solutions with a difficulty of 25 or higher, which can reduce unnecessary transactions and improve efficiency.
+
+### GPU Optimization Parameters
+
+For fine-tuning GPU performance, you can adjust these parameters:
+
+```sh
+bitz collect --gpu --batch-size 768 --hash-threads 320 --solve-threads 160
+```
+
+Available parameters:
+- `--batch-size`: Size of GPU processing batch (512, 768, 1024, etc.)
+- `--hash-threads`: Number of GPU threads per block for hashing (256, 320, 384)
+- `--solve-threads`: Number of GPU threads per block for solving (128, 160, 192)
+
+## 🔄 Command Parameters
+
+### 所有参数中文说明
+
+| 参数 | 短参数 | 说明 | 默认值 | 示例 |
+| ---- | ------ | ---- | ------ | ---- |
+| `--cores` | `-c` | 用于挖矿的CPU核心数，设置为"ALL"使用全部核心 | `1` | `bitz collect -c 4` |
+| `--buffer-time` | `-b` | 在截止时间前多少秒停止收集并开始提交 | `5` | `bitz collect -b 10` |
+| `--device-id` | `-d` | 用于矿池收集的设备ID（每个密钥最多5个设备） | 无 | `bitz collect -d 2` |
+| `--pool-url` | `-p` | 加入并转发解决方案的矿池URL | 无 | `bitz collect -p https://pool.xyz` |
+| `--verbose` | `-v` | 是否运行在详细模式 | `false` | `bitz collect -v` |
+| `--gpu` | 无 | 使用GPU进行挖矿（如果可用） | `false` | `bitz collect --gpu` |
+| `--gpu-device` | 无 | 使用的GPU设备ID | `0` | `bitz collect --gpu --gpu-device 1` |
+| `--batch-size` | 无 | GPU批处理大小（512、768、1024等） | `1024` | `bitz collect --gpu --batch-size 768` |
+| `--hash-threads` | 无 | 哈希阶段的GPU线程块数量 | `384` | `bitz collect --gpu --hash-threads 320` |
+| `--solve-threads` | 无 | 解算阶段的GPU线程块数量 | `192` | `bitz collect --gpu --solve-threads 160` |
+| `--min-difficulty` | `-m` | 设置挖矿的最小难度（默认使用链上值） | 链上值 | `bitz collect -m 25` |
+
+### 常用命令组合示例
+
+1. **基本CPU挖矿**
+   ```sh
+   bitz collect
+   ```
+
+2. **使用8个CPU核心挖矿**
+   ```sh
+   bitz collect -c 8
+   ```
+
+3. **使用全部CPU核心和更长的缓冲时间**
+   ```sh
+   bitz collect -c ALL -b 15
+   ```
+
+4. **使用GPU挖矿，最小难度为30**
+   ```sh
+   bitz collect --gpu -m 30
+   ```
+
+5. **详细模式的矿池挖矿**
+   ```sh
+   bitz collect -p https://pool.example.com -v
+   ```
+
+6. **优化配置的GPU挖矿**
+   ```sh
+   bitz collect --gpu --gpu-device 0 --batch-size 512 --hash-threads 256 --solve-threads 128 -b 10 -m 25
+   ```
+
+7. **连接矿池使用GPU挖矿**
+   ```sh
+   bitz collect --gpu -p https://pool.example.com -d 1
+   ```
+
+8.4060实践
+   ```
+      bitz collect --gpu --batch-size 1024 --hash-threads 384 --solve-threads 192 -m 30
+      bitz collect --gpu --batch-size 1024 --hash-threads 256 --solve-threads 128 
+      bitz collect --gpu --batch-size 2048 --hash-threads 256 --solve-threads 128 
+      
+   ```
 ## ❓ Help
 
 Add the `-h` flag on any command to pull up a help menu with documentation:

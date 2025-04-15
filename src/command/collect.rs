@@ -64,7 +64,19 @@ impl Miner {
         #[cfg(feature = "gpu")]
         if args.gpu {
             std::env::set_var("BITZ_USE_GPU", "1");
-            println!("{} Using GPU for collecting", "INFO".bold().green());
+            
+            // 设置GPU参数环境变量
+            std::env::set_var("BITZ_GPU_BATCH_SIZE", args.batch_size.to_string());
+            std::env::set_var("BITZ_GPU_HASH_THREADS", args.hash_threads.to_string());
+            std::env::set_var("BITZ_GPU_SOLVE_THREADS", args.solve_threads.to_string());
+            
+            println!("{} Using GPU for collecting (Device: {}, Batch Size: {}, Hash Threads: {}, Solve Threads: {})", 
+                "INFO".bold().green(), 
+                args.gpu_device,
+                args.batch_size,
+                args.hash_threads,
+                args.solve_threads
+            );
         } else {
             std::env::set_var("BITZ_USE_GPU", "0");
         }
@@ -417,14 +429,31 @@ impl Miner {
         min_difficulty: u32,
         pool_channel: Option<tokio::sync::mpsc::UnboundedSender<Solution>>,
     ) -> Solution {
+        // 获取环境变量中设置的GPU参数
+        let batch_size = std::env::var("BITZ_GPU_BATCH_SIZE")
+            .map(|v| v.parse::<u32>().unwrap_or(1024))
+            .unwrap_or(1024);
+        
+        let hash_threads = std::env::var("BITZ_GPU_HASH_THREADS")
+            .map(|v| v.parse::<u32>().unwrap_or(384))
+            .unwrap_or(384);
+            
+        let solve_threads = std::env::var("BITZ_GPU_SOLVE_THREADS")
+            .map(|v| v.parse::<u32>().unwrap_or(192))
+            .unwrap_or(192);
+        
         let threads = num_cpus::get();
         let progress_bar = Arc::new(spinner::new_progress_bar());
-        progress_bar.set_message("Collecting with GPU...");
+        progress_bar.set_message(format!(
+            "Collecting with GPU... (Batch: {}, Hash Threads: {}, Solve Threads: {})",
+            batch_size, hash_threads, solve_threads
+        ));
     
         let timer = Instant::now();
     
         const INDEX_SPACE: usize = 65536;
-        let x_batch_size = unsafe { BATCH_SIZE };
+        // 不使用静态BATCH_SIZE，而是使用动态参数
+        let x_batch_size = batch_size;
     
         let mut hashes = vec![0u64; x_batch_size as usize * INDEX_SPACE];
         let mut x_nonce = rand::thread_rng().gen::<u64>();
@@ -435,7 +464,10 @@ impl Miner {
     
         loop {
             unsafe {
-                // 使用GPU进行哈希计算
+                // 使用GPU进行哈希计算 - 动态设置线程数在CUDA层实现
+                std::env::set_var("BITZ_GPU_HASH_THREADS", hash_threads.to_string());
+                std::env::set_var("BITZ_GPU_BATCH_SIZE", batch_size.to_string());
+                
                 gpu_hash(
                     challenge.as_ptr(),
                     &x_nonce as *const u64 as *const u8,
@@ -448,7 +480,9 @@ impl Miner {
             let mut sols = vec![0u32; x_batch_size as usize];
             
             unsafe {
-                // 使用GPU解决所有阶段
+                // 使用GPU解决所有阶段 - 动态设置线程数在CUDA层实现
+                std::env::set_var("BITZ_GPU_SOLVE_THREADS", solve_threads.to_string());
+                
                 gpu_solve_stages(
                     hashes.as_ptr(),
                     digest.as_mut_ptr(),

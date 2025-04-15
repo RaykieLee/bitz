@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "bitz_drillx.h"
 #include "equix.h"
 #include "hashx.h"
@@ -9,25 +10,39 @@
 #include "equix/src/solver_heap.h"
 #include "hashx/src/context.h"
 
-// GPU批处理大小，可根据GPU性能调整
-const int BATCH_SIZE = 4096;
+// GPU批处理大小，可根据GPU性能调整，默认值
+// 实际运行时会从环境变量读取
+const int BATCH_SIZE = 1024;
+
+// 从环境变量读取整数参数，如果未设置则使用默认值
+int get_env_int(const char* name, int default_value) {
+    const char* value = getenv(name);
+    if (value == NULL) {
+        return default_value;
+    }
+    return atoi(value);
+}
 
 extern "C" void gpu_hash(uint8_t *challenge, uint8_t *nonce, uint64_t *out) {
+    // 从环境变量读取批处理大小和线程参数
+    int batch_size = get_env_int("BITZ_GPU_BATCH_SIZE", BATCH_SIZE);
+    int hash_threads = get_env_int("BITZ_GPU_HASH_THREADS", 384);
+    
     // 分配固定内存，提高传输效率
     hashx_ctx** ctxs;
     uint64_t** hash_space;
 
-    cudaMallocHost(&ctxs, BATCH_SIZE * sizeof(hashx_ctx*));
-    cudaMallocHost(&hash_space, BATCH_SIZE * sizeof(uint64_t*));
+    cudaMallocHost(&ctxs, batch_size * sizeof(hashx_ctx*));
+    cudaMallocHost(&hash_space, batch_size * sizeof(uint64_t*));
 
-    for (int i = 0; i < BATCH_SIZE; i++) {
+    for (int i = 0; i < batch_size; i++) {
         cudaMalloc(&hash_space[i], INDEX_SPACE * sizeof(uint64_t));
     }
 
     // 准备种子和哈希上下文
     uint8_t seed[40];
     memcpy(seed, challenge, 32);
-    for (int i = 0; i < BATCH_SIZE; i++) {
+    for (int i = 0; i < batch_size; i++) {
         uint64_t nonce_offset = *((uint64_t*)nonce) + i;
         memcpy(seed + 32, &nonce_offset, 8);
         ctxs[i] = hashx_alloc(HASHX_INTERPRETED);
@@ -37,18 +52,18 @@ extern "C" void gpu_hash(uint8_t *challenge, uint8_t *nonce, uint64_t *out) {
         }
     }
 
-    // 启动内核进行并行哈希计算
-    dim3 threadsPerBlock(1024);
-    dim3 blocksPerGrid((65536 * BATCH_SIZE + threadsPerBlock.x - 1) / threadsPerBlock.x);
-    gpu_hash_kernel<<<blocksPerGrid, threadsPerBlock>>>(ctxs, hash_space);
+    // 启动内核进行并行哈希计算 - 使用动态线程设置
+    dim3 threadsPerBlock(hash_threads);
+    dim3 blocksPerGrid((65536 * batch_size + threadsPerBlock.x - 1) / threadsPerBlock.x);
+    gpu_hash_kernel<<<blocksPerGrid, threadsPerBlock>>>(ctxs, hash_space, batch_size);
     
     // 将哈希结果复制回CPU
-    for (int i = 0; i < BATCH_SIZE; i++) {
+    for (int i = 0; i < batch_size; i++) {
         cudaMemcpy(out + i * INDEX_SPACE, hash_space[i], INDEX_SPACE * sizeof(uint64_t), cudaMemcpyDeviceToHost);
     }
 
     // 释放内存
-    for (int i = 0; i < BATCH_SIZE; i++) {
+    for (int i = 0; i < batch_size; i++) {
         hashx_free(ctxs[i]);
         cudaFree(hash_space[i]);
     }
@@ -56,16 +71,19 @@ extern "C" void gpu_hash(uint8_t *challenge, uint8_t *nonce, uint64_t *out) {
     cudaFreeHost(ctxs);
 }
 
-__global__ void gpu_hash_kernel(hashx_ctx** ctxs, uint64_t** hash_space) {
+__global__ void gpu_hash_kernel(hashx_ctx** ctxs, uint64_t** hash_space, int batch_size) {
     uint32_t item = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t batch_idx = item / INDEX_SPACE;
     uint32_t i = item % INDEX_SPACE;
-    if (batch_idx < BATCH_SIZE) {
+    if (batch_idx < batch_size) {
         hash_stage0i(ctxs[batch_idx], hash_space[batch_idx], i);
     }
 }
 
 extern "C" void gpu_solve_stages(uint64_t *hashes, uint8_t *out, uint32_t *sols, int num_sets) {
+    // 从环境变量读取解算阶段的线程参数
+    int solve_threads = get_env_int("BITZ_GPU_SOLVE_THREADS", 192);
+    
     // 分配设备内存
     uint64_t *d_hashes;
     solver_heap *d_heaps;
@@ -86,8 +104,8 @@ extern "C" void gpu_solve_stages(uint64_t *hashes, uint8_t *out, uint32_t *sols,
     // 复制输入数据到设备
     cudaMemcpy(d_hashes, hashes, num_sets * INDEX_SPACE * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
-    // 启动内核
-    int threadsPerBlock = 256;
+    // 启动内核 - 使用动态线程设置
+    int threadsPerBlock = solve_threads;
     int blocksPerGrid = (num_sets + threadsPerBlock - 1) / threadsPerBlock;
     solve_all_stages_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_hashes, d_heaps, d_solutions, d_num_sols);
 
