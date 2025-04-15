@@ -1,18 +1,24 @@
-# BITZ Collector
+# BITZ Collector with GPU Support
 
-A command line interface for BITZ cryptocurrency collecting.
+A command line interface for BITZ cryptocurrency collecting with GPU acceleration.
 
 ## 📦 Install
 
-To install the CLI, use [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html):
+To install the CLI with GPU support, use [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html):
 
 ```sh
-cargo install bitz
+# 编译并安装 GPU 版本
+cargo install --path . --features gpu
 ```
 
-
 ### Dependencies
-If you run into issues during installation, please install the following dependencies for your operating system and try again:
+
+You will need the following dependencies:
+
+#### Required
+- CUDA Toolkit 12.x or newer (https://developer.nvidia.com/cuda-downloads)
+- A compatible NVIDIA GPU (Compute Capability 7.0 or higher)
+- Rust compiler (1.76.0 or newer)
 
 #### Linux
 ```
@@ -34,12 +40,18 @@ export CPPFLAGS="-I/usr/local/opt/openssl/include"
 choco install openssl pkgconfiglite
 ```
 
-## ⛏️ Collect
+## ⛏️ Collect with GPU
 
-To start collecting, load your keypair with some ETH, and then use the `collect` command:
+To start collecting with GPU, load your keypair with some ETH, and then use the `collect` command with the `--gpu` flag:
 
 ```sh
-bitz collect
+bitz collect --gpu
+```
+
+You can also specify the GPU device to use if you have multiple GPUs:
+
+```sh
+bitz collect --gpu --gpu-device 0
 ```
 
 ## ❓ Help
@@ -48,4 +60,5 @@ Add the `-h` flag on any command to pull up a help menu with documentation:
 
 ```sh
 bitz -h
+bitz collect -h
 ```

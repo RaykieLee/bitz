@@ -164,6 +164,21 @@ pub struct CollectArgs {
         default_value = "false"
     )]
     pub verbose: bool,
+
+    #[arg(
+        long,
+        help = "Use GPU for collecting if available",
+        default_value = "false"
+    )]
+    pub gpu: bool,
+
+    #[arg(
+        long,
+        value_name = "GPU_DEVICE",
+        help = "GPU device ID to use (default: 0)",
+        default_value = "0"
+    )]
+    pub gpu_device: u32,
 }
 
 #[derive(Parser, Debug)]

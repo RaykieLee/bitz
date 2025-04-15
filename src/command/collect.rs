@@ -48,10 +48,27 @@ use crate::{
     Miner,
 };
 
+#[cfg(feature = "gpu")]
+extern "C" {
+    pub static BATCH_SIZE: u32;
+    pub fn gpu_hash(challenge: *const u8, nonce: *const u8, out: *mut u64);
+    pub fn gpu_solve_stages(hashes: *const u64, out: *mut u8, sols: *mut u32, num_sets: i32);
+}
+
 use super::pool::Pool;
+use rayon::prelude::*;
 
 impl Miner {
     pub async fn collect(&self, args: CollectArgs) -> Result<(), Error> {
+        // 设置GPU环境变量
+        #[cfg(feature = "gpu")]
+        if args.gpu {
+            std::env::set_var("BITZ_USE_GPU", "1");
+            println!("{} Using GPU for collecting", "INFO".bold().green());
+        } else {
+            std::env::set_var("BITZ_USE_GPU", "0");
+        }
+
         match args.pool_url {
             Some(ref pool_url) => {
                 let pool = &Pool {
@@ -268,6 +285,15 @@ impl Miner {
         min_difficulty: u32,
         pool_channel: Option<tokio::sync::mpsc::UnboundedSender<Solution>>,
     ) -> Solution {
+        #[cfg(feature = "gpu")]
+        {
+            // 判断是否通过命令行参数启用了GPU
+            if std::env::var("BITZ_USE_GPU").unwrap_or_default() == "1" {
+                return Self::find_hash_gpu(challenge, cutoff_time, min_difficulty, pool_channel).await;
+            }
+        }
+
+        // CPU实现保持不变
         // Dispatch job to each thread
         let progress_bar = Arc::new(spinner::new_progress_bar());
         let global_best_difficulty = Arc::new(AtomicU32::new(0u32));
@@ -382,6 +408,144 @@ impl Miner {
         }
 
         Solution::new(best_hash.d, best_nonce.to_le_bytes())
+    }
+
+    #[cfg(feature = "gpu")]
+    async fn find_hash_gpu(
+        challenge: [u8; 32],
+        cutoff_time: u64,
+        min_difficulty: u32,
+        pool_channel: Option<tokio::sync::mpsc::UnboundedSender<Solution>>,
+    ) -> Solution {
+        let threads = num_cpus::get();
+        let progress_bar = Arc::new(spinner::new_progress_bar());
+        progress_bar.set_message("Collecting with GPU...");
+    
+        let timer = Instant::now();
+    
+        const INDEX_SPACE: usize = 65536;
+        let x_batch_size = unsafe { BATCH_SIZE };
+    
+        let mut hashes = vec![0u64; x_batch_size as usize * INDEX_SPACE];
+        let mut x_nonce = rand::thread_rng().gen::<u64>();
+        let mut processed = 0;
+    
+        // 共享状态
+        let xbest = Arc::new(std::sync::Mutex::new((0, 0, Hash::default())));
+    
+        loop {
+            unsafe {
+                // 使用GPU进行哈希计算
+                gpu_hash(
+                    challenge.as_ptr(),
+                    &x_nonce as *const u64 as *const u8,
+                    hashes.as_mut_ptr() as *mut u64,
+                );
+            }
+
+            // 为结果分配内存
+            let mut digest = vec![0u8; x_batch_size as usize * 16]; // 每个解决方案16字节
+            let mut sols = vec![0u32; x_batch_size as usize];
+            
+            unsafe {
+                // 使用GPU解决所有阶段
+                gpu_solve_stages(
+                    hashes.as_ptr(),
+                    digest.as_mut_ptr(),
+                    sols.as_mut_ptr(),
+                    x_batch_size as i32,
+                );
+            }
+            
+            // 使用Rayon并行处理结果
+            let chunk_size = x_batch_size as usize / threads;
+            let handles: Vec<(u64, u32, Hash)> = (0..threads).into_par_iter().map(|i| {
+                let start = i * chunk_size;
+                let end = if i + 1 == threads { x_batch_size as usize } else { start + chunk_size };
+    
+                let mut best_nonce = 0;
+                let mut best_difficulty = 0;
+                let mut best_hash = Hash::default();
+    
+                for i in start..end {
+                    if sols[i] > 0 {
+                        let solution_digest = &digest[i * 16..(i + 1) * 16];
+                        let solution = Solution::new(
+                            solution_digest.try_into().unwrap(), 
+                            (x_nonce + i as u64).to_le_bytes()
+                        );
+                        let difficulty = solution.to_hash().difficulty();
+                        if solution.is_valid(&challenge) && difficulty > best_difficulty {
+                            best_nonce = u64::from_le_bytes(solution.n);
+                            best_difficulty = difficulty;
+                            best_hash = solution.to_hash();
+                        }
+                    }
+                }
+    
+                (best_nonce, best_difficulty, best_hash)
+            }).collect();
+    
+            // 更新共享状态
+            {
+                let mut xbest = xbest.lock().unwrap();
+                let best_result = handles.into_iter().max_by_key(|&(_, diff, _)| diff).unwrap_or((0, 0, Hash::default()));
+                
+                // 持续上传最佳解决方案到池
+                if best_result.1 >= min_difficulty && best_result.1 > xbest.1 {
+                    if let Some(ref ch) = pool_channel {
+                        let digest = best_result.2.d;
+                        let nonce = best_result.0.to_le_bytes();
+                        let solution = Solution {
+                            d: digest,
+                            n: nonce,
+                        };
+                        if let Err(err) = ch.send(solution) {
+                            println!("{} {:?}", "ERROR".bold().red(), err);
+                        }
+                    }
+                }
+                
+                // 更新最佳结果
+                if best_result.1 > xbest.1 {
+                    *xbest = best_result;
+                }
+            }
+    
+            // 为下一批增加nonce
+            x_nonce += x_batch_size as u64;
+            processed += x_batch_size as usize;
+    
+            // 更新进度条
+            let elapsed = timer.elapsed().as_secs();
+            let best_difficulty = {
+                let xbest = xbest.lock().unwrap();
+                xbest.1
+            };
+    
+            progress_bar.set_message(format!(
+                "Collecting with GPU... (Best score: {}, Time Remaining: {}s, Processed: {})",
+                best_difficulty,
+                cutoff_time.saturating_sub(elapsed),
+                processed
+            ));
+    
+            if timer.elapsed().as_secs() >= cutoff_time {
+                let xbest = xbest.lock().unwrap();
+                if xbest.1 >= min_difficulty {
+                    break;
+                }
+            }
+        }
+    
+        let final_best = xbest.lock().unwrap(); // 锁定并获取最终最佳结果
+        progress_bar.finish_with_message(format!(
+            "Best hash: {} (score: {})",
+            bs58::encode(final_best.2.h).into_string(),
+            final_best.1
+        ));
+    
+        Solution::new(final_best.2.d, final_best.0.to_le_bytes())
     }
 
     pub fn parse_cores(&self, cores: String) -> u64 {
