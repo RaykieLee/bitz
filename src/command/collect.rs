@@ -53,6 +53,7 @@ extern "C" {
     pub static BATCH_SIZE: u32;
     pub fn gpu_hash(challenge: *const u8, nonce: *const u8, out: *mut u64);
     pub fn gpu_solve_stages(hashes: *const u64, out: *mut u8, sols: *mut u32, num_sets: i32);
+    pub fn gpu_unified_mine(challenge: *const u8, nonce: *const u8, out: *mut u8, sols: *mut u32, num_sets: i32);
 }
 
 use super::pool::Pool;
@@ -431,16 +432,16 @@ impl Miner {
     ) -> Solution {
         // 获取环境变量中设置的GPU参数
         let batch_size = std::env::var("BITZ_GPU_BATCH_SIZE")
-            .map(|v| v.parse::<u32>().unwrap_or(1024))
-            .unwrap_or(1024);
+            .map(|v| v.parse::<u32>().unwrap_or(2048))  // 提高默认批处理大小
+            .unwrap_or(2048);
         
         let hash_threads = std::env::var("BITZ_GPU_HASH_THREADS")
-            .map(|v| v.parse::<u32>().unwrap_or(384))
-            .unwrap_or(384);
+            .map(|v| v.parse::<u32>().unwrap_or(1024))  // 提高默认线程数
+            .unwrap_or(1024);
             
         let solve_threads = std::env::var("BITZ_GPU_SOLVE_THREADS")
-            .map(|v| v.parse::<u32>().unwrap_or(192))
-            .unwrap_or(192);
+            .map(|v| v.parse::<u32>().unwrap_or(256))  // 提高默认解算线程数
+            .unwrap_or(256);
         
         let threads = num_cpus::get();
         let progress_bar = Arc::new(spinner::new_progress_bar());
@@ -452,10 +453,7 @@ impl Miner {
         let timer = Instant::now();
     
         const INDEX_SPACE: usize = 65536;
-        // 不使用静态BATCH_SIZE，而是使用动态参数
         let x_batch_size = batch_size;
-    
-        let mut hashes = vec![0u64; x_batch_size as usize * INDEX_SPACE];
         let mut x_nonce = rand::thread_rng().gen::<u64>();
         let mut processed = 0;
     
@@ -463,28 +461,21 @@ impl Miner {
         let xbest = Arc::new(std::sync::Mutex::new((0, 0, Hash::default())));
     
         loop {
-            unsafe {
-                // 使用GPU进行哈希计算 - 动态设置线程数在CUDA层实现
-                std::env::set_var("BITZ_GPU_HASH_THREADS", hash_threads.to_string());
-                std::env::set_var("BITZ_GPU_BATCH_SIZE", batch_size.to_string());
-                
-                gpu_hash(
-                    challenge.as_ptr(),
-                    &x_nonce as *const u64 as *const u8,
-                    hashes.as_mut_ptr() as *mut u64,
-                );
-            }
-
-            // 为结果分配内存
+            // 分配内存用于结果
             let mut digest = vec![0u8; x_batch_size as usize * 16]; // 每个解决方案16字节
             let mut sols = vec![0u32; x_batch_size as usize];
             
             unsafe {
-                // 使用GPU解决所有阶段 - 动态设置线程数在CUDA层实现
+                // 使用新的统一GPU挖矿函数，避免中间数据交换
+                // 设置环境变量
+                std::env::set_var("BITZ_GPU_HASH_THREADS", hash_threads.to_string());
                 std::env::set_var("BITZ_GPU_SOLVE_THREADS", solve_threads.to_string());
+                std::env::set_var("BITZ_GPU_BATCH_SIZE", batch_size.to_string());
                 
-                gpu_solve_stages(
-                    hashes.as_ptr(),
+                // 直接调用统一函数
+                gpu_unified_mine(
+                    challenge.as_ptr(),
+                    &x_nonce as *const u64 as *const u8,
                     digest.as_mut_ptr(),
                     sols.as_mut_ptr(),
                     x_batch_size as i32,

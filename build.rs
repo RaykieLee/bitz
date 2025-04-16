@@ -46,16 +46,26 @@ fn main() {
         .file("cuda/hashx/src/siphash_rng.cu")
         .flag("-cudart=static")
         .flag("-diag-suppress=174")
-        // 支持多种GPU架构
-        .flag("-gencode=arch=compute_70,code=sm_70") // Volta (V100)
-        .flag("-gencode=arch=compute_75,code=sm_75") // Turing (RTX 2080)
-        .flag("-gencode=arch=compute_80,code=sm_80") // Ampere (A100, RTX 3080)
-        .flag("-gencode=arch=compute_86,code=sm_86") // Ampere (RTX 3060, 3070, 3080 Ti)
-        .flag("-gencode=arch=compute_89,code=sm_89") // Ada Lovelace (RTX 4090, etc)
+        // 高级优化标志
+        .flag("-O3")  // 最高级别优化
+        .flag("-use_fast_math")  // 使用快速数学库
+        .flag("-Xptxas=-v")  // 在编译时显示寄存器和内存使用情况
+        .flag("-maxrregcount=64")  // 限制每线程的寄存器使用，提高并行度
+        // 支持多种GPU架构，但针对每种架构进行特殊优化
+        // .flag("-gencode=arch=compute_70,code=sm_70") // Volta (V100)
+        // .flag("-gencode=arch=compute_75,code=sm_75") // Turing (RTX 2080)
+        // .flag("-gencode=arch=compute_80,code=sm_80") // Ampere (A100, RTX 3080)
+        // .flag("-gencode=arch=compute_86,code=[sm_86,compute_86]") // Ampere (RTX 3060, 3070, 3080 Ti) - 主要目标
+        .flag("-gencode=arch=compute_89,code=[sm_89,compute_89]") // Ada Lovelace (RTX 4090, etc) - 主要目标
         .compile("bitz_drillx.a");
 
-    // 添加链接库目录
-    println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64");
+    // 添加链接库目录 - 支持更多系统
+    if cfg!(target_os = "windows") {
+        println!("cargo:rustc-link-search=native=C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.0\\lib\\x64");
+    } else {
+        println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64");
+    }
+    
     println!("cargo:rustc-link-lib=cudart");
     println!("cargo:rustc-link-lib=cuda");
 

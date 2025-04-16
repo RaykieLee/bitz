@@ -1,11 +1,10 @@
-mod account;
-mod benchmark;
-mod claim;
-#[cfg(feature = "admin")]
-mod initialize;
-mod collect;
-mod pool;
-mod program;
-mod stake;
-mod transaction;
-mod transfer;
+pub mod account;
+pub mod benchmark;
+pub mod claim;
+pub mod collect;
+pub mod initialize;
+pub mod pool;
+pub mod program;
+pub mod stake;
+pub mod transaction;
+pub mod transfer;
