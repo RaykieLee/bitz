@@ -138,7 +138,9 @@ Available parameters:
    ```
       bitz collect --gpu --batch-size 1024 --hash-threads 384 --solve-threads 192 -m 30
       bitz collect --gpu --batch-size 1024 --hash-threads 256 --solve-threads 128 
-      bitz collect --gpu --batch-size 2048 --hash-threads 256 --solve-threads 128 
+      bitz collect --gpu --batch-size 2048 --hash-threads 512 --solve-threads 256 
+      ./bitz collect --gpu --batch-size 2048 --hash-threads 1024 --solve-threads 256 
+./bitz collect --gpu --batch-size 4096 --hash-threads 1024 --solve-threads 256  -c ALL
       
    ```
 ## ❓ Help
